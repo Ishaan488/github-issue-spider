@@ -1,0 +1,11 @@
+{
+  "rules": [
+    {
+      "name": "Example Rule",
+      "webhookUrl": "https://discord.com/api/webhooks/YOUR_WEBHOOK_HERE",
+      "labels": ["good first issue"],
+      "languages": ["TypeScript"],
+      "minStars": 100
+    }
+  ]
+}

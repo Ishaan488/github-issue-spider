@@ -1,186 +1,186 @@
 import dotenv from 'dotenv';
+import Database from 'better-sqlite3';
+import path from 'path';
+import fs from 'fs';
 
 dotenv.config();
 
 const GITHUB_TOKEN = process.env.GITHUB_TOKEN;
-const DISCORD_WEBHOOK_URL = process.env.DISCORD_WEBHOOK_URL;
+const DB_PATH = process.env.DATABASE_PATH || path.join(__dirname, 'sniper.db');
+const CONFIG_PATH = path.join(__dirname, 'config.json');
 
-if (!GITHUB_TOKEN || !DISCORD_WEBHOOK_URL) {
-  console.error("❌ Missing environment variables (GITHUB_TOKEN or DISCORD_WEBHOOK_URL).");
+if (!GITHUB_TOKEN) {
+  console.error("❌ Missing GITHUB_TOKEN in .env file.");
   process.exit(1);
 }
 
-// --- HUNTING CONFIGURATION ---
-const TARGET_LABELS = ["good first issue", "help wanted"];
-const TARGET_LANGUAGES = ["TypeScript", "JavaScript", "Python", "Go", "Rust"];
-const MIN_STARS = 500;
-const POLL_INTERVAL_MS = 60000; // 60 seconds (GitHub allows 5000 req/hr; 1/min is very safe)
-
-// --- CACHE & STATE ---
-let lastEtag: string | null = null;
-const seenIssues = new Set<number>();
-
-// --- TYPES ---
-interface GitHubEvent {
-  type: string;
-  repo: { name: string };
-  payload: {
-    action: string;
-    issue?: {
-      id: number;
-      title: string;
-      html_url: string;
-      labels: { name: string }[];
-    };
-  };
+// --- CONFIGURATION ENGINE ---
+interface HuntingRule {
+  name: string;
+  webhookUrl: string;
+  labels: string[];
+  languages: string[];
+  minStars: number;
 }
 
-interface RepoDetails {
-  stargazers_count: number;
-  language: string | null;
+interface AppConfig {
+  rules: HuntingRule[];
 }
 
-// --- CORE FUNCTIONS ---
-async function getRepoDetails(repoName: string): Promise<RepoDetails | null> {
+let activeConfig: AppConfig = { rules: [] };
+
+function loadConfig() {
   try {
-    const response = await fetch(`https://api.github.com/repos/${repoName}`, {
+    const rawData = fs.readFileSync(CONFIG_PATH, 'utf-8');
+    activeConfig = JSON.parse(rawData);
+    console.log(`\n⚙️ Config loaded successfully. Tracking ${activeConfig.rules.length} active rules.`);
+  } catch (error) {
+    console.error("❌ Failed to parse config.json. Ensure it is valid JSON.", error);
+  }
+}
+
+// Hot-reload configuration when the user saves changes to config.json
+fs.watch(CONFIG_PATH, (eventType) => {
+  if (eventType === 'change') {
+    console.log("\n🔄 config.json change detected. Hot-reloading preferences...");
+    loadConfig();
+  }
+});
+
+// Initial load
+loadConfig();
+
+// --- DATABASE STATE MANAGEMENT ---
+const db = new Database(DB_PATH);
+db.pragma('journal_mode = WAL');
+
+db.exec(`
+  CREATE TABLE IF NOT EXISTS processed_issues (
+    issue_id INTEGER PRIMARY KEY,
+    repo_name TEXT NOT NULL,
+    discovered_at TEXT NOT NULL
+  );
+  CREATE TABLE IF NOT EXISTS bot_state (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL
+  );
+`);
+
+const isIssueProcessed = db.prepare('SELECT 1 FROM processed_issues WHERE issue_id = ?');
+const markIssueProcessed = db.prepare('INSERT INTO processed_issues (issue_id, repo_name, discovered_at) VALUES (?, ?, ?)');
+const getLastRunTime = db.prepare('SELECT value FROM bot_state WHERE key = ?');
+const updateLastRunTime = db.prepare('INSERT OR REPLACE INTO bot_state (key, value) VALUES (?, ?)');
+
+// --- UTILITIES ---
+function sleep(ms: number) {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+async function sendDiscordAlert(rule: HuntingRule, title: string, url: string, repoName: string, stars: number, language: string) {
+  const payload = {
+    embeds: [{
+      title: `🎯 ${rule.name}`,
+      url: url,
+      color: 2067276,
+      fields: [
+        { name: "Repository", value: `[${repoName}](https://github.com/${repoName})`, inline: true },
+        { name: "Language", value: language || "Unspecified", inline: true },
+        { name: "Stars ⭐", value: stars.toLocaleString(), inline: true },
+        { name: "Issue Context", value: title, inline: false }
+      ],
+      footer: { text: `GitHub Spider • ${new Date().toISOString()}` }
+    }]
+  };
+
+  try {
+    await fetch(rule.webhookUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    });
+  } catch (error) {
+    console.error(`❌ Discord Alert failed for rule [${rule.name}]:`, error);
+  }
+}
+
+// --- CORE SYSTEM PIPELINE ---
+async function processRule(rule: HuntingRule) {
+  const stateKey = `last_run_${rule.name}`;
+  const lastRunState = getLastRunTime.get(stateKey) as { value: string } | undefined;
+  
+  let lookupTimestamp: string;
+  if (lastRunState?.value) {
+    lookupTimestamp = lastRunState.value;
+  } else {
+    const defaultBackdate = new Date();
+    defaultBackdate.setMinutes(defaultBackdate.getMinutes() - 60); // 1 hour lookback for new rules
+    lookupTimestamp = defaultBackdate.toISOString();
+  }
+
+  const currentExecutionTime = new Date().toISOString();
+  
+  const labelQuery = rule.labels.map(l => `label:"${l}"`).join(' ');
+  const languageQuery = rule.languages.map(lang => `language:${lang}`).join(' ');
+  const baseSearchQuery = `is:issue is:open ${labelQuery} ${languageQuery} created:>=${lookupTimestamp}`;
+  
+  const url = `https://api.github.com/search/issues?q=${encodeURIComponent(baseSearchQuery)}&sort=created&order=asc&per_page=100`;
+
+  try {
+    const response = await fetch(url, {
       headers: {
         'Authorization': `Bearer ${GITHUB_TOKEN}`,
         'Accept': 'application/vnd.github.v3+json',
       }
     });
 
-    if (response.status === 200) {
-      const data = await response.json() as any;
-      return {
-        stargazers_count: data.stargazers_count || 0,
-        language: data.language
-      };
-    }
-  } catch (error) {
-    console.error(`❌ Error fetching repo details for ${repoName}:`, error);
-  }
-  return null;
-}
+    if (!response.ok) return;
 
-async function sendDiscordAlert(title: string, url: string, repoName: string, stars: number, language: string) {
-  const payload = {
-    embeds: [{
-      title: "🎯 New High-Value Issue Found!",
-      url: url,
-      color: 3066993, // GitHub Green
-      fields: [
-        { name: "Repository", value: repoName, inline: true },
-        { name: "Language", value: language || "Unknown", inline: true },
-        { name: "Stars ⭐", value: stars.toString(), inline: true },
-        { name: "Issue", value: title, inline: false }
-      ],
-      footer: { text: `GitHub Sniper Bot • ${new Date().toLocaleTimeString()}` }
-    }]
-  };
-
-  try {
-    const res = await fetch(DISCORD_WEBHOOK_URL!, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload)
-    });
+    const data = await response.json() as any;
     
-    if (!res.ok) console.error(`❌ Discord Webhook Error: ${res.status}`);
-  } catch (error) {
-    console.error("❌ Failed to send Discord alert:", error);
-  }
-}
+    for (const item of data.items || []) {
+      if (isIssueProcessed.get(item.id)) continue;
 
-async function pollGitHubEvents() {
-  // Prevent memory leaks for long-running bots
-  if (seenIssues.size > 5000) {
-    seenIssues.clear();
-    console.log("🧹 Cleared issue cache to free memory.");
-  }
-
-  const headers: Record<string, string> = {
-    'Authorization': `Bearer ${GITHUB_TOKEN}`,
-    'Accept': 'application/vnd.github.v3+json',
-  };
-
-  if (lastEtag) headers['If-None-Match'] = lastEtag;
-
-  try {
-    const response = await fetch('https://api.github.com/events?per_page=100', { headers });
-
-    if (response.status === 304) {
-      process.stdout.write("\x1b[2m.\x1b[0m"); // Dim dot for unchanged data
-      return;
-    }
-
-    const etag = response.headers.get('etag');
-    if (etag) lastEtag = etag;
-
-    if (response.status !== 200) {
-      // Check for rate limiting
-      const rateLimitRemaining = response.headers.get('x-ratelimit-remaining');
-      if (rateLimitRemaining === "0") {
-        console.warn("\n⚠️ GitHub API rate limit exceeded. Waiting for reset...");
-      } else {
-        console.error(`\n❌ GitHub API returned status: ${response.status}`);
-      }
-      return;
-    }
-
-    const events = await response.json() as GitHubEvent[];
-    process.stdout.write("\x1b[32m✓\x1b[0m"); // Green checkmark for new data processed
-
-    for (const event of events) {
-      if (event.type === 'IssuesEvent' && event.payload.issue) {
-        const action = event.payload.action;
-        const issue = event.payload.issue;
-
-        // Only process newly opened or newly labeled issues
-        if ((action === 'opened' || action === 'labeled') && !seenIssues.has(issue.id)) {
-          
-          const labels = issue.labels.map(l => l.name.toLowerCase());
-          const hasMatchingLabel = labels.some(label => TARGET_LABELS.includes(label));
-
-          if (hasMatchingLabel) {
-            const repoName = event.repo.name;
-            const repoInfo = await getRepoDetails(repoName);
-
-            if (
-              repoInfo && 
-              repoInfo.stargazers_count >= MIN_STARS && 
-              repoInfo.language
-            //   TARGET_LANGUAGES.includes(repoInfo.language)
-            ) {
-              console.log(`\n🎯 MATCH! ${repoName} | ⭐ ${repoInfo.stargazers_count} | ${repoInfo.language}`);
-              console.log(`Sending alert for: ${issue.title}`);
-              
-              await sendDiscordAlert(
-                issue.title,
-                issue.html_url,
-                repoName,
-                repoInfo.stargazers_count,
-                repoInfo.language
-              );
-            }
-            
-            // Mark as seen regardless of if it passed the final repo filter
-            // so we don't waste API calls re-fetching repo details on the next poll
-            seenIssues.add(issue.id);
-          }
+      const repoPath = item.repository_url.replace('https://api.github.com/repos/', '');
+      
+      // Fetch repo details for star validation
+      const repoRes = await fetch(item.repository_url, {
+        headers: { 'Authorization': `Bearer ${GITHUB_TOKEN}`, 'Accept': 'application/vnd.github.v3+json' }
+      });
+      
+      if (repoRes.ok) {
+        const repoData = await repoRes.json() as any;
+        if (repoData.stargazers_count >= rule.minStars) {
+          console.log(`🎯 Match for [${rule.name}]: ${repoPath}`);
+          await sendDiscordAlert(rule, item.title, item.html_url, repoPath, repoData.stargazers_count, repoData.language);
         }
       }
+
+      markIssueProcessed.run(item.id, repoPath, new Date().toISOString());
     }
+
+    updateLastRunTime.run(stateKey, currentExecutionTime);
+
   } catch (error) {
-    console.error("\n❌ Error during poll cycle:", error);
+    console.error(`❌ Error processing rule [${rule.name}]:`, error);
+  }
+}
+
+async function masterCron() {
+  if (activeConfig.rules.length === 0) {
+    console.log("⚠️ No rules defined in config.json. Waiting...");
+    return;
+  }
+
+  console.log(`\n--- Starting Scan Cycle for ${activeConfig.rules.length} rules ---`);
+  
+  for (const rule of activeConfig.rules) {
+    await processRule(rule);
+    // 10-second delay between rules to respect GitHub's Search API rate limit (30 requests/min)
+    await sleep(10000); 
   }
 }
 
 // --- INITIALIZATION ---
-console.log("🚀 Starting GitHub Sniper Bot...");
-console.log(`Targeting: ${TARGET_LABELS.join(', ')}`);
-// console.log(`Languages: ${TARGET_LANGUAGES.join(', ')}`);
-console.log(`Min Stars: ${MIN_STARS}`);
-
-pollGitHubEvents();
-setInterval(pollGitHubEvents, POLL_INTERVAL_MS);
+console.log("🚀 Booting Up Configurable GitHub Spider...");
+masterCron();
+setInterval(masterCron, 120000); // Run cycle every 2 minutes
