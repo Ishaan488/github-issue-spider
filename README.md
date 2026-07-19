@@ -24,32 +24,32 @@ Instead of relying on the noisy and delayed GitHub Events firehose, this spider 
 
 Clone the repository and install the required dependencies:
 
-\`\`\`bash
+```bash
 git clone https://github.com/YOUR_USERNAME/github-issue-spider.git
 cd github-issue-spider
 npm install
 npm install -D typescript @types/node @types/better-sqlite3 tsx
-\`\`\`
+```
 
 ### 2. Environment Setup
 
 Create a `.env` file in the root directory and add your GitHub token:
 
-\`\`\`env
+```env
 GITHUB_TOKEN=your_personal_access_token_here
-\`\`\`
+```
 
 ### 3. Rule Configuration
 
 Copy the template configuration file:
 
-\`\`\`bash
+```bash
 cp config.example.json config.json
-\`\`\`
+```
 
 Edit `config.json` to define your crawl rules. You can add as many blocks as you want:
 
-\`\`\`json
+```json
 {
   "rules": [
     {
@@ -68,7 +68,7 @@ Edit `config.json` to define your crawl rules. You can add as many blocks as you
     }
   ]
 }
-\`\`\`
+```
 
 ---
 
@@ -76,9 +76,9 @@ Edit `config.json` to define your crawl rules. You can add as many blocks as you
 
 Start the bot using `tsx`:
 
-\`\`\`bash
+```bash
 npx tsx bot.ts
-\`\`\`
+```
 
 **What happens next?**
 1. The spider automatically creates a `spider.db` SQLite database in your directory.
