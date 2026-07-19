@@ -6,7 +6,7 @@ import fs from 'fs';
 dotenv.config();
 
 const GITHUB_TOKEN = process.env.GITHUB_TOKEN;
-const DB_PATH = process.env.DATABASE_PATH || path.join(__dirname, 'sniper.db');
+const DB_PATH = process.env.DATABASE_PATH || path.join(__dirname, 'spider.db');
 const CONFIG_PATH = path.join(__dirname, 'config.json');
 
 if (!GITHUB_TOKEN) {
@@ -107,7 +107,7 @@ async function sendDiscordAlert(rule: HuntingRule, title: string, url: string, r
 async function processRule(rule: HuntingRule) {
   const stateKey = `last_run_${rule.name}`;
   const lastRunState = getLastRunTime.get(stateKey) as { value: string } | undefined;
-  
+
   let lookupTimestamp: string;
   if (lastRunState?.value) {
     lookupTimestamp = lastRunState.value;
@@ -118,11 +118,11 @@ async function processRule(rule: HuntingRule) {
   }
 
   const currentExecutionTime = new Date().toISOString();
-  
+
   const labelQuery = rule.labels.map(l => `label:"${l}"`).join(' ');
   const languageQuery = rule.languages.map(lang => `language:${lang}`).join(' ');
   const baseSearchQuery = `is:issue is:open ${labelQuery} ${languageQuery} created:>=${lookupTimestamp}`;
-  
+
   const url = `https://api.github.com/search/issues?q=${encodeURIComponent(baseSearchQuery)}&sort=created&order=asc&per_page=100`;
 
   try {
@@ -136,17 +136,17 @@ async function processRule(rule: HuntingRule) {
     if (!response.ok) return;
 
     const data = await response.json() as any;
-    
+
     for (const item of data.items || []) {
       if (isIssueProcessed.get(item.id)) continue;
 
       const repoPath = item.repository_url.replace('https://api.github.com/repos/', '');
-      
+
       // Fetch repo details for star validation
       const repoRes = await fetch(item.repository_url, {
         headers: { 'Authorization': `Bearer ${GITHUB_TOKEN}`, 'Accept': 'application/vnd.github.v3+json' }
       });
-      
+
       if (repoRes.ok) {
         const repoData = await repoRes.json() as any;
         if (repoData.stargazers_count >= rule.minStars) {
@@ -172,11 +172,11 @@ async function masterCron() {
   }
 
   console.log(`\n--- Starting Scan Cycle for ${activeConfig.rules.length} rules ---`);
-  
+
   for (const rule of activeConfig.rules) {
     await processRule(rule);
     // 10-second delay between rules to respect GitHub's Search API rate limit (30 requests/min)
-    await sleep(10000); 
+    await sleep(10000);
   }
 }
 
