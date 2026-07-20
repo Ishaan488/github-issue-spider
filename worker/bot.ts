@@ -1,75 +1,38 @@
 import dotenv from 'dotenv';
-import Database from 'better-sqlite3';
+import { createClient } from '@supabase/supabase-js';
 import path from 'path';
-import fs from 'fs';
 
-dotenv.config();
+// Load from both Next.js default locations
+dotenv.config({ path: path.resolve(process.cwd(), '.env.local') });
+dotenv.config({ path: path.resolve(process.cwd(), '.env') });
 
 const GITHUB_TOKEN = process.env.GITHUB_TOKEN;
-const DB_PATH = process.env.DATABASE_PATH || path.join(__dirname, 'spider.db');
-const CONFIG_PATH = path.join(__dirname, 'config.json');
+const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL;
+// We MUST use the service role key to bypass RLS in the background worker
+const SUPABASE_SERVICE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
 
 if (!GITHUB_TOKEN) {
   console.error("❌ Missing GITHUB_TOKEN in .env file.");
   process.exit(1);
 }
 
-// --- CONFIGURATION ENGINE ---
+if (!SUPABASE_URL || !SUPABASE_SERVICE_KEY) {
+  console.error("❌ Missing Supabase URL or Service Role Key in environment variables.");
+  console.error("Please add NEXT_PUBLIC_SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY to your .env.local file.");
+  process.exit(1);
+}
+
+const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY);
+
 interface HuntingRule {
+  id: string;
   name: string;
-  webhookUrl: string;
+  webhook_url: string;
   labels: string[];
   languages: string[];
-  minStars: number;
+  min_stars: number;
+  last_run_timestamp: string | null;
 }
-
-interface AppConfig {
-  rules: HuntingRule[];
-}
-
-let activeConfig: AppConfig = { rules: [] };
-
-function loadConfig() {
-  try {
-    const rawData = fs.readFileSync(CONFIG_PATH, 'utf-8');
-    activeConfig = JSON.parse(rawData);
-    console.log(`\n⚙️ Config loaded successfully. Tracking ${activeConfig.rules.length} active rules.`);
-  } catch (error) {
-    console.error("❌ Failed to parse config.json. Ensure it is valid JSON.", error);
-  }
-}
-
-// Hot-reload configuration when the user saves changes to config.json
-fs.watch(CONFIG_PATH, (eventType) => {
-  if (eventType === 'change') {
-    console.log("\n🔄 config.json change detected. Hot-reloading preferences...");
-    loadConfig();
-  }
-});
-
-// Initial load
-loadConfig();
-
-// --- DATABASE STATE MANAGEMENT ---
-const db = new Database(DB_PATH);
-db.pragma('journal_mode = WAL');
-
-db.exec(`
-  CREATE TABLE IF NOT EXISTS processed_issues (
-    issue_id INTEGER PRIMARY KEY,
-    repo_name TEXT NOT NULL,
-    discovered_at TEXT NOT NULL
-  );
-  CREATE TABLE IF NOT EXISTS bot_state (
-    key TEXT PRIMARY KEY,
-    value TEXT NOT NULL
-  );
-`);
-
-const isIssueProcessed = db.prepare('SELECT 1 FROM processed_issues WHERE issue_id = ?');
-const markIssueProcessed = db.prepare('INSERT INTO processed_issues (issue_id, repo_name, discovered_at) VALUES (?, ?, ?)');
-const getLastRunTime = db.prepare('SELECT value FROM bot_state WHERE key = ?');
-const updateLastRunTime = db.prepare('INSERT OR REPLACE INTO bot_state (key, value) VALUES (?, ?)');
 
 // --- UTILITIES ---
 function sleep(ms: number) {
@@ -93,7 +56,7 @@ async function sendDiscordAlert(rule: HuntingRule, title: string, url: string, r
   };
 
   try {
-    await fetch(rule.webhookUrl, {
+    await fetch(rule.webhook_url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload)
@@ -105,15 +68,12 @@ async function sendDiscordAlert(rule: HuntingRule, title: string, url: string, r
 
 // --- CORE SYSTEM PIPELINE ---
 async function processRule(rule: HuntingRule) {
-  const stateKey = `last_run_${rule.name}`;
-  const lastRunState = getLastRunTime.get(stateKey) as { value: string } | undefined;
-
   let lookupTimestamp: string;
-  if (lastRunState?.value) {
-    lookupTimestamp = lastRunState.value;
+  if (rule.last_run_timestamp) {
+    lookupTimestamp = rule.last_run_timestamp;
   } else {
     const defaultBackdate = new Date();
-    defaultBackdate.setMinutes(defaultBackdate.getMinutes() - 60); // 1 hour lookback for new rules
+    defaultBackdate.setMinutes(defaultBackdate.getMinutes() - 60); // 1 hour lookback
     lookupTimestamp = defaultBackdate.toISOString();
   }
 
@@ -133,12 +93,23 @@ async function processRule(rule: HuntingRule) {
       }
     });
 
-    if (!response.ok) return;
+    if (!response.ok) {
+      console.error(`❌ GitHub API Error for rule [${rule.name}]: ${response.status} ${response.statusText}`);
+      return;
+    }
 
     const data = await response.json() as any;
 
     for (const item of data.items || []) {
-      if (isIssueProcessed.get(item.id)) continue;
+      // Check if processed
+      const { data: existing } = await supabase
+        .from('processed_issues')
+        .select('issue_id')
+        .eq('issue_id', item.id)
+        .eq('rule_id', rule.id)
+        .maybeSingle();
+
+      if (existing) continue;
 
       const repoPath = item.repository_url.replace('https://api.github.com/repos/', '');
 
@@ -149,16 +120,26 @@ async function processRule(rule: HuntingRule) {
 
       if (repoRes.ok) {
         const repoData = await repoRes.json() as any;
-        if (repoData.stargazers_count >= rule.minStars) {
+        if (repoData.stargazers_count >= rule.min_stars) {
           console.log(`🎯 Match for [${rule.name}]: ${repoPath}`);
           await sendDiscordAlert(rule, item.title, item.html_url, repoPath, repoData.stargazers_count, repoData.language);
         }
       }
 
-      markIssueProcessed.run(item.id, repoPath, new Date().toISOString());
+      // Mark processed
+      await supabase.from('processed_issues').insert([{
+        issue_id: item.id,
+        repo_name: repoPath,
+        rule_id: rule.id,
+        discovered_at: new Date().toISOString()
+      }]);
     }
 
-    updateLastRunTime.run(stateKey, currentExecutionTime);
+    // Update last run time
+    await supabase
+      .from('rules')
+      .update({ last_run_timestamp: currentExecutionTime })
+      .eq('id', rule.id);
 
   } catch (error) {
     console.error(`❌ Error processing rule [${rule.name}]:`, error);
@@ -166,14 +147,18 @@ async function processRule(rule: HuntingRule) {
 }
 
 async function masterCron() {
-  if (activeConfig.rules.length === 0) {
-    console.log("⚠️ No rules defined in config.json. Waiting...");
+  console.log("\n--- Starting Global Scan Cycle ---");
+  
+  const { data: rules, error } = await supabase.from('rules').select('*');
+  
+  if (error || !rules || rules.length === 0) {
+    console.log("⚠️ No active rules found across all users. Waiting...");
     return;
   }
 
-  console.log(`\n--- Starting Scan Cycle for ${activeConfig.rules.length} rules ---`);
+  console.log(`Tracking ${rules.length} active rules globally.`);
 
-  for (const rule of activeConfig.rules) {
+  for (const rule of rules) {
     await processRule(rule);
     // 10-second delay between rules to respect GitHub's Search API rate limit (30 requests/min)
     await sleep(10000);
@@ -181,6 +166,6 @@ async function masterCron() {
 }
 
 // --- INITIALIZATION ---
-console.log("🚀 Booting Up Configurable GitHub Spider...");
+console.log("🚀 Booting Up Global Supabase Bot Engine...");
 masterCron();
 setInterval(masterCron, 120000); // Run cycle every 2 minutes
