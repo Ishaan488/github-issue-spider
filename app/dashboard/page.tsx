@@ -44,7 +44,12 @@ export default function DashboardPage() {
         .eq("user_id", user.id)
         .order("created_at", { ascending: false });
 
-      if (data) setRules(data);
+      if (error) {
+        console.error("Error fetching rules:", error);
+        alert(`Error fetching rules: ${error.message}`);
+      } else if (data) {
+        setRules(data);
+      }
     }
     setLoading(false);
   };
@@ -83,9 +88,17 @@ export default function DashboardPage() {
     };
 
     if (editingRuleId) {
-      await supabase.from("rules").update(newRule).eq("id", editingRuleId);
+      const { error } = await supabase.from("rules").update(newRule).eq("id", editingRuleId);
+      if (error) {
+        alert(`Error updating rule: ${error.message}`);
+        return;
+      }
     } else {
-      await supabase.from("rules").insert([newRule]);
+      const { error } = await supabase.from("rules").insert([newRule]);
+      if (error) {
+        alert(`Error creating rule: ${error.message}`);
+        return;
+      }
     }
 
     setIsModalOpen(false);

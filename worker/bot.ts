@@ -11,15 +11,13 @@ const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL;
 // We MUST use the service role key to bypass RLS in the background worker
 const SUPABASE_SERVICE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
 
-if (!GITHUB_TOKEN) {
-  console.error("❌ Missing GITHUB_TOKEN in .env file.");
-  process.exit(1);
-}
-
 if (!SUPABASE_URL || !SUPABASE_SERVICE_KEY) {
   console.error("❌ Missing Supabase URL or Service Role Key in environment variables.");
   console.error("Please add NEXT_PUBLIC_SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY to your .env.local file.");
   process.exit(1);
+}
+if (!GITHUB_TOKEN) {
+  console.warn("⚠️ No GITHUB_TOKEN found. The bot will run unauthenticated (limited to 10 requests per minute).");
 }
 
 const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY);
@@ -86,12 +84,12 @@ async function processRule(rule: HuntingRule) {
   const url = `https://api.github.com/search/issues?q=${encodeURIComponent(baseSearchQuery)}&sort=created&order=asc&per_page=100`;
 
   try {
-    const response = await fetch(url, {
-      headers: {
-        'Authorization': `Bearer ${GITHUB_TOKEN}`,
-        'Accept': 'application/vnd.github.v3+json',
-      }
-    });
+    const headers: Record<string, string> = {
+      'Accept': 'application/vnd.github.v3+json',
+    };
+    if (GITHUB_TOKEN) headers['Authorization'] = `Bearer ${GITHUB_TOKEN}`;
+
+    const response = await fetch(url, { headers });
 
     if (!response.ok) {
       console.error(`❌ GitHub API Error for rule [${rule.name}]: ${response.status} ${response.statusText}`);
@@ -114,9 +112,7 @@ async function processRule(rule: HuntingRule) {
       const repoPath = item.repository_url.replace('https://api.github.com/repos/', '');
 
       // Fetch repo details for star validation
-      const repoRes = await fetch(item.repository_url, {
-        headers: { 'Authorization': `Bearer ${GITHUB_TOKEN}`, 'Accept': 'application/vnd.github.v3+json' }
-      });
+      const repoRes = await fetch(item.repository_url, { headers });
 
       if (repoRes.ok) {
         const repoData = await repoRes.json() as any;
