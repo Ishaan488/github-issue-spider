@@ -1,0 +1,32 @@
+{
+  "rules": [
+    {
+      "name": "Frontend Beginner Tasks",
+      "webhookUrl": "https://discord.com/api/webhooks/1528282992135376976/_6Ick9GWr2Ikp1tRABN0W9qoGQRlsd3jhyko871hrvDApk05Z3KPUDlMcNzk-dz52jqK",
+      "labels": [
+        "good first issue",
+        "help wanted"
+      ],
+      "languages": [
+        "TypeScript",
+        "JavaScript",
+        "HTML",
+        "CSS"
+      ],
+      "minStars": 500
+    },
+    {
+      "name": "Heavyweight Rust Bugs",
+      "webhookUrl": "https://discord.com/api/webhooks/1528282992135376976/_6Ick9GWr2Ikp1tRABN0W9qoGQRlsd3jhyko871hrvDApk05Z3KPUDlMcNzk-dz52jqK",
+      "labels": [
+        "bug",
+        "critical"
+      ],
+      "languages": [
+        "Rust",
+        "Go"
+      ],
+      "minStars": 1000
+    }
+  ]
+}
