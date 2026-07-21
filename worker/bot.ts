@@ -126,6 +126,8 @@ async function processRule(rule: HuntingRule, userToken: string) {
       await supabase.from('processed_issues').insert([{
         issue_id: item.id,
         repo_name: repoPath,
+        issue_title: item.title,
+        issue_url: item.html_url,
         rule_id: rule.id,
         discovered_at: new Date().toISOString()
       }]);
@@ -145,7 +147,8 @@ async function processRule(rule: HuntingRule, userToken: string) {
 async function masterCron() {
   console.log("\n--- Starting Global Scan Cycle ---");
   
-  const { data: rules, error } = await supabase.from('rules').select('*');
+  // Fetch all active rules
+  const { data: rules, error } = await supabase.from('rules').select('*').eq('is_active', true);
   
   if (error || !rules || rules.length === 0) {
     console.log("⚠️ No active rules found across all users. Waiting...");

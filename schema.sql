@@ -7,6 +7,7 @@ CREATE TABLE IF NOT EXISTS public.rules (
   labels TEXT[] NOT NULL,
   languages TEXT[] NOT NULL,
   min_stars INTEGER NOT NULL DEFAULT 0,
+  is_active BOOLEAN DEFAULT true,
   last_run_timestamp TIMESTAMPTZ,
   created_at TIMESTAMPTZ DEFAULT NOW()
 );
@@ -15,6 +16,8 @@ CREATE TABLE IF NOT EXISTS public.rules (
 CREATE TABLE IF NOT EXISTS public.processed_issues (
   issue_id BIGINT PRIMARY KEY,
   repo_name TEXT NOT NULL,
+  issue_title TEXT,
+  issue_url TEXT,
   rule_id UUID REFERENCES public.rules(id) ON DELETE CASCADE,
   discovered_at TIMESTAMPTZ DEFAULT NOW()
 );
