@@ -255,7 +255,7 @@ export default function DashboardPage() {
                     Paused
                   </div>
                 )}
-                <div className="absolute top-4 right-4 flex gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
+                <div className="absolute top-4 right-4 flex gap-2 opacity-100 lg:opacity-0 group-hover:opacity-100 transition-opacity">
                   <button onClick={() => toggleRuleStatus(rule.id, rule.is_active)} className="p-2 bg-white/5 hover:bg-white/10 rounded-md text-gray-400 hover:text-white transition-colors" title={rule.is_active ? "Pause Rule" : "Resume Rule"}>
                     {rule.is_active ? <Pause className="w-4 h-4" /> : <Play className="w-4 h-4 text-green-400" />}
                   </button>
