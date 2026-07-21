@@ -189,5 +189,18 @@ async function masterCron() {
 
 // --- INITIALIZATION ---
 console.log("🚀 Booting Up Global Supabase Bot Engine...");
-masterCron();
-setInterval(masterCron, 120000); // Run cycle every 2 minutes
+
+if (process.env.RUN_ONCE === 'true') {
+  // Run exactly once and then exit (Perfect for GitHub Actions / Cron)
+  masterCron().then(() => {
+    console.log("✅ One-time scan complete. Shutting down.");
+    process.exit(0);
+  }).catch((err) => {
+    console.error("❌ Fatal error during run:", err);
+    process.exit(1);
+  });
+} else {
+  // Run continuously (Perfect for local development or a dedicated VPS)
+  masterCron();
+  setInterval(masterCron, 120000); // Run cycle every 2 minutes
+}
