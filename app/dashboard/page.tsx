@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import { createClient } from "@/utils/supabase/client";
 import { motion, AnimatePresence } from "framer-motion";
-import { Plus, Trash2, Edit2, Webhook, Tag, Code, Star, Clock, AlertCircle } from "lucide-react";
+import { Plus, Trash2, Edit2, Webhook, Tag, Code, Star, Clock, AlertCircle, Pause, Play, ExternalLink, Zap } from "lucide-react";
 
 type Rule = {
   id: string;
@@ -12,11 +12,22 @@ type Rule = {
   labels: string[];
   languages: string[];
   min_stars: number;
+  is_active: boolean;
   last_run_timestamp: string | null;
+};
+
+type ProcessedIssue = {
+  issue_id: number;
+  repo_name: string;
+  issue_title: string;
+  issue_url: string;
+  discovered_at: string;
+  rule: { name: string };
 };
 
 export default function DashboardPage() {
   const [rules, setRules] = useState<Rule[]>([]);
+  const [recentMatches, setRecentMatches] = useState<ProcessedIssue[]>([]);
   const [loading, setLoading] = useState(true);
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingRuleId, setEditingRuleId] = useState<string | null>(null);
@@ -92,6 +103,17 @@ export default function DashboardPage() {
       } else if (data) {
         setRules(data);
       }
+      
+      // Fetch recent matches
+      const { data: matches } = await supabase
+        .from("processed_issues")
+        .select("*, rule:rules(name)")
+        .order("discovered_at", { ascending: false })
+        .limit(10);
+      
+      if (matches) {
+        setRecentMatches(matches as any);
+      }
     }
     setLoading(false);
   };
@@ -152,6 +174,11 @@ export default function DashboardPage() {
       await supabase.from("rules").delete().eq("id", id);
       fetchRules();
     }
+  };
+
+  const toggleRuleStatus = async (id: string, currentStatus: boolean) => {
+    await supabase.from("rules").update({ is_active: !currentStatus }).eq("id", id);
+    fetchRules();
   };
 
   return (
@@ -221,9 +248,17 @@ export default function DashboardPage() {
                 initial={{ opacity: 0, scale: 0.95 }}
                 animate={{ opacity: 1, scale: 1 }}
                 exit={{ opacity: 0, scale: 0.95 }}
-                className="bg-[#111] border border-white/10 rounded-xl p-6 relative group"
+                className={`bg-[#111] border ${rule.is_active ? 'border-white/10' : 'border-gray-800 opacity-60'} rounded-xl p-6 relative group transition-opacity`}
               >
+                {!rule.is_active && (
+                  <div className="absolute -top-3 -left-3 bg-gray-800 text-gray-400 text-xs font-bold px-2 py-1 rounded-md border border-gray-700 uppercase tracking-wider shadow-lg">
+                    Paused
+                  </div>
+                )}
                 <div className="absolute top-4 right-4 flex gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
+                  <button onClick={() => toggleRuleStatus(rule.id, rule.is_active)} className="p-2 bg-white/5 hover:bg-white/10 rounded-md text-gray-400 hover:text-white transition-colors" title={rule.is_active ? "Pause Rule" : "Resume Rule"}>
+                    {rule.is_active ? <Pause className="w-4 h-4" /> : <Play className="w-4 h-4 text-green-400" />}
+                  </button>
                   <button onClick={() => openModal(rule)} className="p-2 bg-white/5 hover:bg-white/10 rounded-md text-gray-400 hover:text-white transition-colors">
                     <Edit2 className="w-4 h-4" />
                   </button>
@@ -232,7 +267,7 @@ export default function DashboardPage() {
                   </button>
                 </div>
 
-                <h3 className="text-xl font-semibold mb-4 pr-20">{rule.name}</h3>
+                <h3 className="text-xl font-semibold mb-4 pr-24">{rule.name}</h3>
                 
                 <div className="space-y-3 text-sm text-gray-300">
                   <div className="flex items-center gap-3">
@@ -269,6 +304,51 @@ export default function DashboardPage() {
               </motion.div>
             ))}
           </AnimatePresence>
+        </div>
+      )}
+
+      {/* Recent Matches Section */}
+      {!loading && recentMatches.length > 0 && (
+        <div className="mt-16">
+          <div className="flex items-center gap-3 mb-6">
+            <div className="p-2 bg-green-500/10 rounded-lg">
+              <Zap className="w-5 h-5 text-green-400" />
+            </div>
+            <h2 className="text-2xl font-bold tracking-tight">Recent Discoveries</h2>
+          </div>
+          
+          <div className="bg-[#111] border border-white/10 rounded-2xl overflow-hidden shadow-2xl">
+            <div className="divide-y divide-white/5">
+              {recentMatches.map((match) => (
+                <a 
+                  key={match.issue_id}
+                  href={match.issue_url || `https://github.com/${match.repo_name}/issues`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="block p-4 sm:p-6 hover:bg-white/[0.02] transition-colors group relative"
+                >
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-2 mb-1">
+                        <span className="text-xs font-mono text-gray-500 truncate">{match.repo_name}</span>
+                        <span className="bg-purple-500/20 text-purple-300 px-2 py-0.5 rounded-full text-[10px] font-semibold border border-purple-500/20 truncate">
+                          {match.rule?.name || "Unknown Rule"}
+                        </span>
+                      </div>
+                      <h4 className="text-lg font-medium text-gray-200 group-hover:text-white transition-colors flex items-center gap-2 truncate">
+                        {match.issue_title || `Issue #${match.issue_id}`}
+                        <ExternalLink className="w-4 h-4 opacity-0 group-hover:opacity-100 transition-opacity text-gray-400" />
+                      </h4>
+                    </div>
+                    <div className="flex items-center gap-2 text-sm text-gray-500 shrink-0">
+                      <Clock className="w-4 h-4" />
+                      {new Date(match.discovered_at).toLocaleString()}
+                    </div>
+                  </div>
+                </a>
+              ))}
+            </div>
+          </div>
         </div>
       )}
 
