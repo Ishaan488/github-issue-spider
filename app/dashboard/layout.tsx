@@ -2,6 +2,7 @@ import { redirect } from "next/navigation";
 import { createClient } from "@/utils/supabase/server";
 import { Bug, LogOut } from "lucide-react";
 import Link from "next/link";
+import ProfileDropdown from "./ProfileDropdown";
 
 export default async function DashboardLayout({
   children,
@@ -29,23 +30,7 @@ export default async function DashboardLayout({
           </Link>
           
           <div className="flex items-center gap-6">
-            <div className="flex items-center gap-3">
-              <img 
-                src={user.user_metadata.avatar_url || "https://github.com/ghost.png"} 
-                alt="Avatar" 
-                className="w-8 h-8 rounded-full border border-white/20"
-              />
-              <span className="text-sm text-gray-300 hidden md:block">
-                {user.user_metadata.user_name || user.email}
-              </span>
-            </div>
-            
-            <form action="/auth/signout" method="post">
-              <button className="text-gray-400 hover:text-white transition-colors flex items-center gap-2 text-sm">
-                <LogOut className="w-4 h-4" />
-                <span className="hidden md:block">Sign out</span>
-              </button>
-            </form>
+            <ProfileDropdown user={user} />
           </div>
         </div>
       </nav>
