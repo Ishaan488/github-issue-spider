@@ -2,11 +2,12 @@ import dotenv from 'dotenv';
 import { createClient } from '@supabase/supabase-js';
 import path from 'path';
 
+import { decryptToken } from '../utils/crypto';
+
 // Load from both Next.js default locations
 dotenv.config({ path: path.resolve(process.cwd(), '.env.local') });
 dotenv.config({ path: path.resolve(process.cwd(), '.env') });
 
-const GITHUB_TOKEN = process.env.GITHUB_TOKEN;
 const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL;
 // We MUST use the service role key to bypass RLS in the background worker
 const SUPABASE_SERVICE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
@@ -16,14 +17,13 @@ if (!SUPABASE_URL || !SUPABASE_SERVICE_KEY) {
   console.error("Please add NEXT_PUBLIC_SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY to your .env.local file.");
   process.exit(1);
 }
-if (!GITHUB_TOKEN) {
-  console.warn("⚠️ No GITHUB_TOKEN found. The bot will run unauthenticated (limited to 10 requests per minute).");
-}
+
 
 const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY);
 
 interface HuntingRule {
   id: string;
+  user_id: string;
   name: string;
   webhook_url: string;
   labels: string[];
@@ -65,7 +65,7 @@ async function sendDiscordAlert(rule: HuntingRule, title: string, url: string, r
 }
 
 // --- CORE SYSTEM PIPELINE ---
-async function processRule(rule: HuntingRule) {
+async function processRule(rule: HuntingRule, userToken: string) {
   let lookupTimestamp: string;
   if (rule.last_run_timestamp) {
     lookupTimestamp = rule.last_run_timestamp;
@@ -86,8 +86,8 @@ async function processRule(rule: HuntingRule) {
   try {
     const headers: Record<string, string> = {
       'Accept': 'application/vnd.github.v3+json',
+      'Authorization': `Bearer ${userToken}`,
     };
-    if (GITHUB_TOKEN) headers['Authorization'] = `Bearer ${GITHUB_TOKEN}`;
 
     const response = await fetch(url, { headers });
 
@@ -152,10 +152,36 @@ async function masterCron() {
     return;
   }
 
+  // Fetch all user settings to get tokens
+  const userIds = [...new Set(rules.map(r => r.user_id))];
+  const { data: settings } = await supabase
+    .from('user_settings')
+    .select('user_id, github_token')
+    .in('user_id', userIds);
+
+  const tokenMap = new Map<string, string>();
+  if (settings) {
+    for (const s of settings) {
+      if (s.github_token) {
+        try {
+          tokenMap.set(s.user_id, decryptToken(s.github_token));
+        } catch (e) {
+          console.error(`❌ Failed to decrypt token for user ${s.user_id}`);
+        }
+      }
+    }
+  }
+
   console.log(`Tracking ${rules.length} active rules globally.`);
 
   for (const rule of rules) {
-    await processRule(rule);
+    const userToken = tokenMap.get(rule.user_id);
+    if (!userToken) {
+      console.log(`⚠️ Skipping rule [${rule.name}]: No valid GitHub token for user.`);
+      continue;
+    }
+
+    await processRule(rule, userToken);
     // 10-second delay between rules to respect GitHub's Search API rate limit (30 requests/min)
     await sleep(10000);
   }

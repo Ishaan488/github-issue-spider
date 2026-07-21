@@ -50,3 +50,31 @@ CREATE POLICY "Users can view issues processed by their rules"
       AND rules.user_id = auth.uid()
     )
   );
+
+-- Create user_settings table for storing encrypted GitHub tokens
+CREATE TABLE IF NOT EXISTS public.user_settings (
+  user_id UUID PRIMARY KEY REFERENCES auth.users(id) ON DELETE CASCADE,
+  github_token TEXT,
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- Enable RLS for user_settings
+ALTER TABLE public.user_settings ENABLE ROW LEVEL SECURITY;
+
+-- Policies for user_settings table (Users can only manage their own settings)
+CREATE POLICY "Users can view their own settings"
+  ON public.user_settings FOR SELECT
+  USING (auth.uid() = user_id);
+
+CREATE POLICY "Users can insert their own settings"
+  ON public.user_settings FOR INSERT
+  WITH CHECK (auth.uid() = user_id);
+
+CREATE POLICY "Users can update their own settings"
+  ON public.user_settings FOR UPDATE
+  USING (auth.uid() = user_id);
+
+CREATE POLICY "Users can delete their own settings"
+  ON public.user_settings FOR DELETE
+  USING (auth.uid() = user_id);

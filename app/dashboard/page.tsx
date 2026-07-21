@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import { createClient } from "@/utils/supabase/client";
 import { motion, AnimatePresence } from "framer-motion";
-import { Plus, Trash2, Edit2, Webhook, Tag, Code, Star, Clock } from "lucide-react";
+import { Plus, Trash2, Edit2, Webhook, Tag, Code, Star, Clock, AlertCircle } from "lucide-react";
 
 type Rule = {
   id: string;
@@ -20,6 +20,12 @@ export default function DashboardPage() {
   const [loading, setLoading] = useState(true);
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingRuleId, setEditingRuleId] = useState<string | null>(null);
+
+  // Token State
+  const [hasToken, setHasToken] = useState<boolean>(true);
+  const [githubToken, setGithubToken] = useState("");
+  const [savingToken, setSavingToken] = useState(false);
+  
   
   // Form State
   const [name, setName] = useState("");
@@ -32,7 +38,43 @@ export default function DashboardPage() {
 
   useEffect(() => {
     fetchRules();
+    checkToken();
   }, []);
+
+  const checkToken = async () => {
+    try {
+      const res = await fetch('/api/settings/token');
+      if (res.ok) {
+        const data = await res.json();
+        setHasToken(data.hasToken);
+      }
+    } catch (e) {
+      console.error("Error checking token:", e);
+    }
+  };
+
+  const saveGithubToken = async () => {
+    if (!githubToken) return;
+    setSavingToken(true);
+    try {
+      const res = await fetch('/api/settings/token', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ token: githubToken })
+      });
+      const data = await res.json();
+      if (data.success) {
+        setHasToken(true);
+        setGithubToken("");
+        alert("GitHub Token saved securely!");
+      } else {
+        alert(data.error || "Error saving token");
+      }
+    } catch (e) {
+      alert("Error saving token");
+    }
+    setSavingToken(false);
+  };
 
   const fetchRules = async () => {
     setLoading(true);
@@ -114,6 +156,34 @@ export default function DashboardPage() {
 
   return (
     <div className="py-8">
+      {!hasToken && (
+        <div className="mb-8 bg-red-500/10 border border-red-500/20 rounded-xl p-4 flex flex-col md:flex-row items-center justify-between gap-4">
+          <div className="flex items-center gap-3 text-red-400">
+            <AlertCircle className="w-6 h-6 shrink-0" />
+            <div>
+              <p className="font-semibold">Action Required: GitHub Token Missing</p>
+              <p className="text-sm opacity-80">Your bot will not work until you provide a GitHub Personal Access Token.</p>
+            </div>
+          </div>
+          <div className="flex w-full md:w-auto gap-2">
+            <input 
+              type="password" 
+              placeholder="ghp_xxxxxxxxxxxx" 
+              value={githubToken}
+              onChange={(e) => setGithubToken(e.target.value)}
+              className="w-full md:w-64 bg-black/20 border border-red-500/30 rounded-lg px-4 py-2 text-white focus:outline-none focus:border-red-500"
+            />
+            <button 
+              onClick={saveGithubToken}
+              disabled={savingToken || !githubToken}
+              className="bg-red-500 hover:bg-red-600 text-white px-4 py-2 rounded-lg transition-colors font-medium whitespace-nowrap disabled:opacity-50"
+            >
+              {savingToken ? "Saving..." : "Save Token"}
+            </button>
+          </div>
+        </div>
+      )}
+
       <div className="flex justify-between items-center mb-8">
         <div>
           <h1 className="text-3xl font-bold tracking-tight mb-2">Hunting Rules</h1>
