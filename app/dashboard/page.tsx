@@ -87,8 +87,8 @@ export default function DashboardPage() {
     setSavingToken(false);
   };
 
-  const fetchRules = async () => {
-    setLoading(true);
+  const fetchRules = async (showLoader = true) => {
+    if (showLoader) setLoading(true);
     const { data: { user } } = await supabase.auth.getUser();
     if (user) {
       const { data, error } = await supabase
@@ -166,19 +166,19 @@ export default function DashboardPage() {
     }
 
     setIsModalOpen(false);
-    fetchRules();
+    fetchRules(false);
   };
 
   const deleteRule = async (id: string) => {
     if (confirm("Are you sure you want to delete this rule?")) {
       await supabase.from("rules").delete().eq("id", id);
-      fetchRules();
+      fetchRules(false);
     }
   };
 
   const toggleRuleStatus = async (id: string, currentStatus: boolean) => {
     await supabase.from("rules").update({ is_active: !currentStatus }).eq("id", id);
-    fetchRules();
+    fetchRules(false);
   };
 
   return (
